@@ -650,11 +650,7 @@ let calYear, calMonth;
     genreEl.appendChild(o);
   });
 
-  // Set default date range
-  const fmt = d => d.toISOString().slice(0,10);
-  const end = new Date(today); end.setDate(end.getDate()+90);
-  document.getElementById('date-from').value = fmt(today);
-  document.getElementById('date-to').value = fmt(end);
+  // Date fields left blank by default — no date filtering unless user sets them
 
   // Stats bar
   const datesSorted = [...new Set(ALL_EVENTS.map(e=>e.event_date||e.date))].sort();
@@ -924,10 +920,8 @@ function resetFilters() {
   document.getElementById('search').value = '';
   document.getElementById('city-filter').value = '';
   document.getElementById('genre-filter').value = '';
-  const today = new Date();
-  const end = new Date(today); end.setDate(end.getDate()+90);
-  document.getElementById('date-from').value = today.toISOString().slice(0,10);
-  document.getElementById('date-to').value = end.toISOString().slice(0,10);
+  document.getElementById('date-from').value = '';
+  document.getElementById('date-to').value = '';
   applyFilters();
 }
 
