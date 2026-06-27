@@ -37,6 +37,9 @@ EVENTS_PATH = os.environ.get("EVENTS_PATH", "events.js")
 def _slug(name: str) -> str:
     return name.strip().lower().replace(" ", "-")
 
+def _genre_name(g) -> str:
+    return (g if isinstance(g, str) else g.get("name", "")).strip()
+
 
 # ---------------------------------------------------------------------------
 # HTTP session with retry on transient errors
@@ -187,38 +190,30 @@ def fetch_all_events(api_key: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Map
 # ---------------------------------------------------------------------------
-def _extract_genres(raw: dict) -> tuple[str, str]:
+def _extract_genres(raw: dict) -> str:
     """
-    Returns (genres, genres_all).
+    Returns a comma-separated genre slug string.
 
     Jambase v3 puts genres on performer objects, not on the event itself.
     The event-level `genre` array is checked first as a fallback, but in
     practice it is almost always empty.
 
-    `genres`     — deduplicated genres from ALL performers, in order of
-                   first appearance (headliner first).
-    `genres_all` — same set, but includes genres only found on supporting
-                   acts (superset of `genres` when all performers are the same).
+    Genres are deduplicated and ordered by first appearance (headliner first).
     """
-    seen: dict[str, None] = {}  # use dict to preserve insertion order + dedup
+    seen: dict[str, None] = {}  # dict preserves insertion order + deduplicates
 
-    # 1. Event-level genres (usually empty in Jambase v3, but handle it)
     for g in raw.get("genre", []):
-        name = (g if isinstance(g, str) else g.get("name", "")).strip()
+        name = _genre_name(g)
         if name:
             seen[_slug(name)] = None
 
-    # 2. Each performer's genres (this is where Jambase actually stores them)
     for performer in raw.get("performer", []):
         for g in performer.get("genre", []):
-            name = (g if isinstance(g, str) else g.get("name", "")).strip()
+            name = _genre_name(g)
             if name:
                 seen[_slug(name)] = None
 
-    genres_str = ",".join(seen.keys())
-    # genres_all is the same right now; keep it separate in case we later
-    # want to split headliner vs support genres
-    return genres_str, genres_str
+    return ",".join(seen.keys())
 
 
 def _best_ticket_url(offers: list[dict]) -> str:
@@ -253,7 +248,7 @@ def map_event(raw: dict) -> dict:
     artists_str = " | ".join(p.get("name", "") for p in performers if p.get("name"))
 
     # Genres (see _extract_genres docstring)
-    genres_str, genres_all_str = _extract_genres(raw)
+    genres_str = _extract_genres(raw)
 
     # Tickets — pick the most relevant offer URL
     tickets_url = _best_ticket_url(raw.get("offers", []))
@@ -269,7 +264,6 @@ def map_event(raw: dict) -> dict:
         "headliner": headliner,
         "artists": artists_str,
         "genres": genres_str,
-        "genres_all": genres_all_str,
         "url": raw.get("url", ""),
         "tickets": tickets_url,
     }

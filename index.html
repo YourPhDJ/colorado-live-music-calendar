@@ -69,6 +69,65 @@
     letter-spacing: 0.05em;
   }
 
+  /* ── FILTER TOGGLE BAR ── */
+  .filter-toggle-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-top: 0.6rem;
+  }
+  .filter-toggle-btn {
+    background: transparent;
+    border: 1px solid var(--sage);
+    border-radius: 4px;
+    color: var(--slate);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.68rem;
+    letter-spacing: 0.06em;
+    padding: 0.3rem 0.65rem;
+    text-transform: uppercase;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .filter-toggle-btn:hover,
+  .filter-toggle-btn.open { border-color: var(--amber); color: var(--amber); }
+  .filter-toggle-btn .caret {
+    display: inline-block;
+    font-style: normal;
+    transition: transform 0.15s;
+  }
+  .filter-toggle-btn:not(.open) .caret { transform: rotate(-90deg); }
+  .filter-active-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    align-items: center;
+  }
+  .filter-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    background: rgba(232,148,58,0.12);
+    border: 1px solid rgba(232,148,58,0.4);
+    border-radius: 3px;
+    color: var(--amber);
+    cursor: pointer;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.6rem;
+    letter-spacing: 0.04em;
+    padding: 0.18rem 0.4rem;
+    text-transform: uppercase;
+    transition: all 0.15s;
+  }
+  .filter-pill:hover { background: rgba(232,148,58,0.22); border-color: var(--amber); }
+  .pill-x { font-size: 0.7rem; opacity: 0.65; line-height: 1; }
+  .controls-wrapper.collapsed { display: none; }
+
   /* ── CONTROLS ── */
   .controls {
     max-width: 1300px;
@@ -495,7 +554,6 @@
     .cal-day { min-height: 55px; padding: 0.25rem; }
   }
 </style>
-<script src="events.js"></script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/choices.js@11.2.3/public/assets/styles/choices.min.css">
 <script src="https://cdn.jsdelivr.net/npm/choices.js@11.2.3/public/assets/scripts/choices.min.js"></script>
 <style>
@@ -670,9 +728,9 @@
   </div>
 </div>
 
+<script src="events.js"></script>
 <script>
-// ── DATA ──
-// ALL_EVENTS is loaded from events.js (see <script src="events.js"> in <head>)
+// ALL_EVENTS is loaded from events.js above
 
 // ── GENRE COLOR MAP ──
 const GENRE_COLORS = {
@@ -759,7 +817,7 @@ const GENRE_LABELS = {
   // Populate & init genre Choices
   // Prefer genres from event data; fall back to the hardcoded GENRE_LABELS list
   const genreSet = new Set();
-  ALL_EVENTS.forEach(e => e.genres.split(',').forEach(g => { if(g.trim()) genreSet.add(g.trim()); }));
+  ALL_EVENTS.forEach(e => eventGenres(e).forEach(g => genreSet.add(g)));
   const genreKeys = genreSet.size > 0
     ? [...genreSet].sort()
     : Object.keys(GENRE_LABELS).sort((a,b) => GENRE_LABELS[a].localeCompare(GENRE_LABELS[b]));
@@ -780,7 +838,7 @@ const GENRE_LABELS = {
   });
 
   // Stats bar
-  const datesSorted = [...new Set(ALL_EVENTS.map(e=>e.event_date||e.date))].sort();
+  const datesSorted = [...new Set(ALL_EVENTS.map(e=>e.date))].sort();
   const firstDate = datesSorted[0];
   const lastDate = datesSorted[datesSorted.length-1];
   const venueCount = new Set(ALL_EVENTS.map(e=>e.venue)).size;
@@ -853,7 +911,7 @@ function applyFilters() {
     if (selectedCities.length && !selectedCities.includes(e.city)) return false;
     if (selectedVenues.length && !selectedVenues.includes(e.venue)) return false;
     if (selectedGenres.length) {
-      const eGenres = e.genres.split(',').map(g=>g.trim());
+      const eGenres = eventGenres(e);
       if (!selectedGenres.some(g => eGenres.includes(g))) return false;
     }
     if (q) {
@@ -864,8 +922,6 @@ function applyFilters() {
   });
 
   updateFilterPills();
-
-  filtered.sort((a,b)=>(a.date||'').localeCompare(b.date||''));
 
   const rc = document.getElementById('result-count');
   rc.innerHTML = '<strong>' + filtered.length + '</strong> shows match your filters' +
@@ -899,9 +955,16 @@ function appendListItems(container, start, end) {
     container.innerHTML = '<div class="empty-state"><div class="icon">🎸</div><p>No shows match your filters.<br>Try widening the date range or clearing a filter.</p></div>';
     return;
   }
+
+  // Precompute per-day counts once rather than re-scanning on every header
+  const dayCounts = {};
+  for (const e of filtered) {
+    const d = (e.date||'').slice(0,10);
+    dayCounts[d] = (dayCounts[d]||0) + 1;
+  }
+
   let lastDay = '';
   let dayDiv = null;
-  // Collect existing last day key
   const existingDayHeaders = container.querySelectorAll('.day-header');
   if (existingDayHeaders.length > 0) {
     lastDay = existingDayHeaders[existingDayHeaders.length-1].dataset.day;
@@ -917,7 +980,7 @@ function appendListItems(container, start, end) {
       const dh = document.createElement('div');
       dh.className = 'day-header';
       dh.dataset.day = day;
-      dh.innerHTML = formatDay(day) + '<span class="day-count">' + filtered.filter(x=>x.date.slice(0,10)===day).length + ' shows</span>';
+      dh.innerHTML = formatDay(day) + '<span class="day-count">' + (dayCounts[day]||0) + ' shows</span>';
       dg.appendChild(dh);
       container.appendChild(dg);
       dayDiv = dg;
@@ -937,9 +1000,8 @@ function buildCard(e) {
   card.className = 'event-card';
   card.onclick = () => openModal(e);
 
-  const genres = e.genres.split(',').map(g=>g.trim()).filter(Boolean);
-  const primaryGenre = genres[0]||'';
-  const [bg,] = genreColor(primaryGenre);
+  const genres = eventGenres(e);
+  const [bg] = genreColor(genres[0]||'');
   card.style.borderLeftColor = bg;
 
   const artists = e.artists.split('|').map(a=>a.trim()).filter(Boolean);
@@ -952,10 +1014,7 @@ function buildCard(e) {
       '<div class="event-artists">' + esc(artistPreview) + '</div>' +
     '</div>' +
     '<div class="event-right">' +
-      '<div class="genre-tags">' + genres.slice(0,2).map(g => {
-        const [bg,fg] = genreColor(g);
-        return '<span class="genre-tag" style="background:'+bg+';color:'+lighten(fg)+'">'+esc(g)+'</span>';
-      }).join('') + '</div>' +
+      '<div class="genre-tags">' + buildGenreTagsHTML(genres.slice(0,2)) + '</div>' +
       (e.tickets ? '<a class="ticket-link" href="'+esc(e.tickets)+'" target="_blank" onclick="event.stopPropagation()">Tickets ↗</a>' : '') +
     '</div>';
   return card;
@@ -1005,15 +1064,13 @@ function renderCal() {
     el.className = 'cal-day' + (dateStr===today?' today':'');
     const events = dayMap[dateStr]||[];
     let html = '<span class="cal-day-num">'+d+'</span>';
-    const show3 = events.slice(0,3);
-    show3.forEach(e => {
-      const genres = e.genres.split(',').map(g=>g.trim());
-      const [bg,] = genreColor(genres[0]||'');
+    events.slice(0,3).forEach(e => {
+      const [bg] = genreColor(eventGenres(e)[0]||'');
       html += '<a class="cal-event-pill" style="background:'+bg+'" onclick="event.stopPropagation();openModal('+JSON.stringify(e).replace(/"/g,'&quot;')+')">'
         + esc(e.headliner||e.name) + '</a>';
     });
     if (events.length > 3) {
-      html += '<div class="cal-more" onclick="showDayModal(dateStr,'+events.length+')">+' + (events.length-3) + ' more</div>';
+      html += '<div class="cal-more" onclick="showDayModal(\''+dateStr+'\')">+' + (events.length-3) + ' more</div>';
     }
     el.innerHTML = html;
     grid.appendChild(el);
@@ -1037,11 +1094,8 @@ function calNext() { calMonth++; if(calMonth>11){calMonth=0;calYear++;} renderCa
 
 // ── MODAL ──
 function openModal(e) {
-  const genres = e.genres.split(',').map(g=>g.trim()).filter(Boolean);
-  document.getElementById('modal-genres').innerHTML = genres.map(g => {
-    const [bg,] = genreColor(g);
-    return '<span class="genre-tag" style="background:'+bg+';color:#f5f0e8">'+esc(g)+'</span>';
-  }).join('');
+  const genres = eventGenres(e);
+  document.getElementById('modal-genres').innerHTML = buildGenreTagsHTML(genres);
   document.getElementById('modal-title').textContent = e.name;
   document.getElementById('modal-venue').textContent = '📍 ' + e.venue + ' · ' + e.city;
   const d = new Date((e.date||'')+'T12:00:00');
@@ -1056,7 +1110,7 @@ function openModal(e) {
   document.getElementById('modal-overlay').classList.add('open');
 }
 
-function showDayModal(dateStr, count) {
+function showDayModal(dateStr) {
   const events = filtered.filter(e=>e.date.slice(0,10)===dateStr);
   const d = new Date(dateStr+'T12:00:00');
   document.getElementById('modal-genres').innerHTML = '';
@@ -1106,7 +1160,18 @@ function esc(s) {
   if (!s) return '';
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
-function lighten(hex) { return '#f5f0e8'; }
+
+function eventGenres(e) {
+  if (!e.genres) return [];
+  return e.genres.split(',').map(g => g.trim()).filter(Boolean);
+}
+
+function buildGenreTagsHTML(genres) {
+  return genres.map(g => {
+    const [bg] = genreColor(g);
+    return '<span class="genre-tag" style="background:'+bg+';color:#f5f0e8">'+esc(GENRE_LABELS[g]||g)+'</span>';
+  }).join('');
+}
 </script>
 </body>
 </html>
