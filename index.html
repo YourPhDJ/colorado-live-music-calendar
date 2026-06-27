@@ -126,7 +126,8 @@
   }
   .filter-pill:hover { background: rgba(232,148,58,0.22); border-color: var(--amber); }
   .pill-x { font-size: 0.7rem; opacity: 0.65; line-height: 1; }
-  .controls-wrapper.collapsed { display: none; }
+  .controls-wrapper { overflow: hidden; transition: max-height 0.3s ease; max-height: 1200px; }
+  .controls-wrapper.collapsed { max-height: 0; }
 
   /* ── CONTROLS ── */
   .controls {
@@ -547,7 +548,8 @@
 
   @media (max-width: 640px) {
     .controls { flex-direction: column; }
-    .control-group { min-width: 100%; }
+    .control-group { min-width: 100% !important; max-width: 100% !important; }
+    .choices, .choices__inner { width: 100% !important; max-width: 100% !important; }
     .event-card { grid-template-columns: 1fr; }
     .event-right { align-items: flex-start; flex-direction: row; flex-wrap: wrap; }
     .cal-grid { font-size: 0.6rem; }
@@ -795,6 +797,12 @@ const GENRE_LABELS = {
   const today = new Date();
   calYear = today.getFullYear();
   calMonth = today.getMonth();
+
+  // Collapse filters by default on mobile so the event list is the first thing visible.
+  if (window.matchMedia('(max-width: 640px)').matches) {
+    document.getElementById('controls-wrapper').classList.add('collapsed');
+    document.getElementById('filter-toggle-btn').classList.remove('open');
+  }
 
   const CHOICES_OPTS = {
     removeItemButton: true,
