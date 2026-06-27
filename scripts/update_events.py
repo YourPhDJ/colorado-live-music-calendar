@@ -45,16 +45,16 @@ def fetch_all_events(api_key: str) -> list[dict]:
 
     while True:
         params = {
-            "apikey": api_key,
             "stateCode": STATE_CODE,
             "dateFrom": date_from,
             "dateTo": date_to,
             "perPage": PER_PAGE,
             "page": page,
         }
+        headers = {"x-api-key": api_key}
 
         try:
-            resp = requests.get(JAMBASE_API_URL, params=params, timeout=30)
+            resp = requests.get(JAMBASE_API_URL, params=params, headers=headers, timeout=30)
             resp.raise_for_status()
         except requests.RequestException as exc:
             print(f"  ✗ Request failed on page {page}: {exc}", file=sys.stderr)
