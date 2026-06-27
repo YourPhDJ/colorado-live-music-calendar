@@ -19,13 +19,19 @@ from datetime import date, timedelta
 
 import requests
 
-JAMBASE_API_URL = "https://data.jambase.com/api/v3/events"
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+JAMBASE_API_URL = "https://api.data.jambase.com/v3/events"
 STATE_CODE = "CO"
 DAYS_AHEAD = int(os.environ.get("DAYS_AHEAD", 180))
-PER_PAGE = 50
+PER_PAGE = 50          # Jambase max is 50
 HTML_PATH = os.environ.get("HTML_PATH", "index.html")
 
 
+# ---------------------------------------------------------------------------
+# Fetch
+# ---------------------------------------------------------------------------
 def fetch_all_events(api_key: str) -> list[dict]:
     today = date.today()
     date_from = today.strftime("%Y-%m-%d")
@@ -45,16 +51,23 @@ def fetch_all_events(api_key: str) -> list[dict]:
             "perPage": PER_PAGE,
             "page": page,
         }
-        headers = {"x-api-key": api_key}
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "application/json",
+            "User-Agent": "JamBaseData/1.0",
+        }
 
         try:
             resp = requests.get(JAMBASE_API_URL, params=params, headers=headers, timeout=30)
+            print(f"  HTTP {resp.status_code} — body preview: {resp.text[:300]!r}")
             if not resp.ok:
-                print(f"  ✗ HTTP {resp.status_code} on page {page}", file=sys.stderr)
-                print(f"  Response body: {resp.text[:500]}", file=sys.stderr)
                 resp.raise_for_status()
         except requests.RequestException as exc:
             print(f"  ✗ Request failed on page {page}: {exc}", file=sys.stderr)
+            sys.exit(1)
+
+        if not resp.text.strip():
+            print("  ✗ API returned empty response body", file=sys.stderr)
             sys.exit(1)
 
         data = resp.json()
@@ -80,28 +93,38 @@ def fetch_all_events(api_key: str) -> list[dict]:
     return all_events
 
 
+# ---------------------------------------------------------------------------
+# Map
+# ---------------------------------------------------------------------------
 def _first_str(lst: list, field: str, fallback: str = "") -> str:
     return lst[0].get(field, fallback) if lst else fallback
 
 
 def map_event(raw: dict) -> dict:
+    """Convert a raw Jambase event object to the ALL_EVENTS schema."""
+
+    # ID: "jambase:event:15106153" → "15106153"
     identifier = raw.get("identifier", "")
     event_id = identifier.rsplit(":", 1)[-1] if identifier else raw.get("id", "")
 
+    # Location
     location = raw.get("location", {})
     address = location.get("address", {})
     geo = location.get("geo", {})
 
+    # Performers
     performers = raw.get("performer", [])
     headliner = _first_str(performers, "name")
     artists_str = " | ".join(p.get("name", "") for p in performers if p.get("name"))
 
+    # Genres — normalise to lowercase-hyphenated slugs
     genres_str = ",".join(
         g.get("name", "").lower().replace(" ", "-")
         for g in raw.get("genre", [])
         if g.get("name")
     )
 
+    # Tickets — prefer the first offer that looks like a ticket link
     offers = raw.get("offers", [])
     tickets_url = _first_str(offers, "url")
 
@@ -121,6 +144,11 @@ def map_event(raw: dict) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Patch HTML
+# ---------------------------------------------------------------------------
+# Matches:  const ALL_EVENTS = [...];
+# The array may be minified (no newlines) or pretty-printed.
 _ALL_EVENTS_RE = re.compile(
     r"(const ALL_EVENTS\s*=\s*)\[[\s\S]*?\];",
     re.MULTILINE,
@@ -141,7 +169,11 @@ def patch_html(events: list[dict], html_path: str = HTML_PATH) -> None:
     updated, n_subs = _ALL_EVENTS_RE.subn(replacement, content)
 
     if n_subs == 0:
-        print("  ✗ Could not locate `const ALL_EVENTS = [...]` in the HTML.", file=sys.stderr)
+        print(
+            "  ✗ Could not locate `const ALL_EVENTS = [...]` in the HTML.\n"
+            "    Check that the pattern hasn't changed.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     with open(html_path, "w", encoding="utf-8") as fh:
@@ -150,24 +182,33 @@ def patch_html(events: list[dict], html_path: str = HTML_PATH) -> None:
     print(f"  ✓ Wrote {len(events)} events to {html_path}")
 
 
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 def main() -> None:
     api_key = os.environ.get("JAMBASE_API_KEY", "").strip()
     if not api_key:
         print("Error: JAMBASE_API_KEY environment variable is not set.", file=sys.stderr)
         sys.exit(1)
 
+    # 1. Fetch
     raw_events = fetch_all_events(api_key)
     print(f"\nTotal raw events: {len(raw_events)}")
 
+    # 2. Drop cancelled events
     raw_events = [
         e for e in raw_events
         if e.get("eventStatus") not in ("EventCancelled", "EventPostponed")
     ]
     print(f"After filtering cancelled/postponed: {len(raw_events)}")
 
+    # 3. Map to schema
     events = [map_event(e) for e in raw_events]
+
+    # 4. Sort chronologically
     events.sort(key=lambda e: (e["date"], e["name"]))
 
+    # 5. Patch HTML
     print(f"\nPatching {HTML_PATH} …")
     patch_html(events)
 
