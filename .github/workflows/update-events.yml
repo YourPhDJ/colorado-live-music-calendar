@@ -1,17 +1,16 @@
-name: Update Colorado Live Music Events
+name: Refresh Live Music Events
 
 on:
   schedule:
-    - cron: '0 6 * * *'
+    - cron: "0 6 * * *"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
-  update-events:
+  update:
     runs-on: ubuntu-latest
-
-    permissions:
-      contents: write
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -19,25 +18,27 @@ jobs:
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install requests
+        run: pip install requests urllib3
 
-      - name: Fetch events and patch index.html
+      - name: Fetch events and write events.js
         env:
           JAMBASE_API_KEY: ${{ secrets.JAMBASE_API_KEY }}
         run: python scripts/update_events.py
 
-      - name: Commit and push if index.html changed
+      - name: Commit and push events.js if changed
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add index.html
-          if git diff --staged --quiet; then
-            echo "No new events — index.html unchanged, skipping commit."
+          git add events.js
+          if git diff --cached --quiet; then
+            echo "No changes to events.js — skipping commit"
           else
-            DATESTAMP=$(date -u +'%Y-%m-%d')
+            DATESTAMP=$(date -u +%Y-%m-%d)
             git commit -m "chore: refresh live music events for ${DATESTAMP}"
-            git push
+            for attempt in 1 2 3; do
+              git push && break || { echo "Push attempt ${attempt} failed, retrying in 10s…"; sleep 10; }
+            done
           fi
