@@ -25,7 +25,7 @@ import requests
 JAMBASE_API_URL = "https://api.data.jambase.com/v3/events"
 STATE_CODE = "CO"
 DAYS_AHEAD = int(os.environ.get("DAYS_AHEAD", 180))
-PER_PAGE = 50          # Jambase max is 50
+PER_PAGE = 50
 HTML_PATH = os.environ.get("HTML_PATH", "index.html")
 
 
@@ -45,9 +45,9 @@ def fetch_all_events(api_key: str) -> list[dict]:
 
     while True:
         params = {
-            "stateCode": STATE_CODE,
-            "dateFrom": date_from,
-            "dateTo": date_to,
+            "geoStateIso": f"US-{STATE_CODE}",
+            "eventDateFrom": date_from,
+            "eventDateTo": date_to,
             "perPage": PER_PAGE,
             "page": page,
         }
@@ -59,29 +59,56 @@ def fetch_all_events(api_key: str) -> list[dict]:
 
         try:
             resp = requests.get(JAMBASE_API_URL, params=params, headers=headers, timeout=30)
-            print(f"  HTTP {resp.status_code} — body preview: {resp.text[:300]!r}")
-            if not resp.ok:
-                resp.raise_for_status()
         except requests.RequestException as exc:
-            print(f"  ✗ Request failed on page {page}: {exc}", file=sys.stderr)
+            print(f"  ✗ Network error on page {page}: {exc}", file=sys.stderr)
+            sys.exit(1)
+
+        # Always log status so we can see what happened in CI
+        print(f"  HTTP {resp.status_code}")
+
+        if not resp.ok:
+            print(f"  ✗ API error — response body: {resp.text[:500]}", file=sys.stderr)
             sys.exit(1)
 
         if not resp.text.strip():
             print("  ✗ API returned empty response body", file=sys.stderr)
             sys.exit(1)
 
-        data = resp.json()
-
-        if not data.get("success", False):
-            print(f"  ✗ API returned success=false: {data}", file=sys.stderr)
+        try:
+            data = resp.json()
+        except Exception as exc:
+            print(f"  ✗ Could not parse JSON: {exc}", file=sys.stderr)
+            print(f"  Raw response: {resp.text[:500]}", file=sys.stderr)
             sys.exit(1)
 
-        events = data.get("events", [])
+        # On the first page, print the response structure so we can
+        # verify field names in the CI logs without guessing
+        if page == 1:
+            print(f"  Top-level response keys: {list(data.keys())}")
+            events_sample = data.get("events") or data.get("data") or []
+            if events_sample:
+                first = events_sample[0]
+                print(f"  First event keys: {list(first.keys())}")
+                print(f"  First event (truncated): {json.dumps(first, default=str)[:600]}")
+
+        # Support both {"events": [...]} and {"data": [...]} response shapes
+        events = data.get("events") or data.get("data") or []
+
+        if page == 1 and not events:
+            print("  ✗ No events found in response — check parameter names or API plan", file=sys.stderr)
+            print(f"  Full response: {json.dumps(data, default=str)[:1000]}", file=sys.stderr)
+            sys.exit(1)
+
         all_events.extend(events)
 
-        pagination = data.get("pagination", {})
+        # Support both {"pagination": {...}} and {"meta": {...}} shapes
+        pagination = data.get("pagination") or data.get("meta") or {}
         if total_pages is None:
-            total_pages = pagination.get("totalPages", 1)
+            total_pages = (
+                pagination.get("totalPages")
+                or pagination.get("total_pages")
+                or 1
+            )
 
         print(f"  Page {page}/{total_pages} — {len(all_events)} events so far")
 
@@ -101,11 +128,11 @@ def _first_str(lst: list, field: str, fallback: str = "") -> str:
 
 
 def map_event(raw: dict) -> dict:
-    """Convert a raw Jambase event object to the ALL_EVENTS schema."""
+    """Convert a raw Jambase v3 event object to the ALL_EVENTS schema."""
 
     # ID: "jambase:event:15106153" → "15106153"
     identifier = raw.get("identifier", "")
-    event_id = identifier.rsplit(":", 1)[-1] if identifier else raw.get("id", "")
+    event_id = identifier.rsplit(":", 1)[-1] if identifier else str(raw.get("id", ""))
 
     # Location
     location = raw.get("location", {})
@@ -117,14 +144,14 @@ def map_event(raw: dict) -> dict:
     headliner = _first_str(performers, "name")
     artists_str = " | ".join(p.get("name", "") for p in performers if p.get("name"))
 
-    # Genres — normalise to lowercase-hyphenated slugs
+    # Genres
     genres_str = ",".join(
         g.get("name", "").lower().replace(" ", "-")
         for g in raw.get("genre", [])
         if g.get("name")
     )
 
-    # Tickets — prefer the first offer that looks like a ticket link
+    # Tickets
     offers = raw.get("offers", [])
     tickets_url = _first_str(offers, "url")
 
@@ -147,8 +174,6 @@ def map_event(raw: dict) -> dict:
 # ---------------------------------------------------------------------------
 # Patch HTML
 # ---------------------------------------------------------------------------
-# Matches:  const ALL_EVENTS = [...];
-# The array may be minified (no newlines) or pretty-printed.
 _ALL_EVENTS_RE = re.compile(
     r"(const ALL_EVENTS\s*=\s*)\[[\s\S]*?\];",
     re.MULTILINE,
@@ -188,14 +213,16 @@ def patch_html(events: list[dict], html_path: str = HTML_PATH) -> None:
 def main() -> None:
     api_key = os.environ.get("JAMBASE_API_KEY", "").strip()
     if not api_key:
-        print("Error: JAMBASE_API_KEY environment variable is not set.", file=sys.stderr)
+        print("✗ Error: JAMBASE_API_KEY environment variable is not set.", file=sys.stderr)
         sys.exit(1)
+
+    print(f"API key present: {api_key[:8]}…")  # show first 8 chars to confirm it loaded
 
     # 1. Fetch
     raw_events = fetch_all_events(api_key)
-    print(f"\nTotal raw events: {len(raw_events)}")
+    print(f"\nTotal raw events fetched: {len(raw_events)}")
 
-    # 2. Drop cancelled events
+    # 2. Drop cancelled/postponed
     raw_events = [
         e for e in raw_events
         if e.get("eventStatus") not in ("EventCancelled", "EventPostponed")
