@@ -999,7 +999,7 @@ function appendListItems(container, start, end) {
 }
 
 function formatDay(dateStr) {
-  const d = new Date(dateStr + 'T12:00:00');
+  const d = new Date(dateStr.slice(0,10) + 'T12:00:00');
   return d.toLocaleDateString('en-US', {weekday:'long', month:'long', day:'numeric', year:'numeric'});
 }
 
@@ -1106,7 +1106,7 @@ function openModal(e) {
   document.getElementById('modal-genres').innerHTML = buildGenreTagsHTML(genres);
   document.getElementById('modal-title').textContent = e.name;
   document.getElementById('modal-venue').textContent = '📍 ' + e.venue + ' · ' + e.city;
-  const d = new Date((e.date||'')+'T12:00:00');
+  const d = new Date((e.date||'').slice(0,10)+'T12:00:00');
   document.getElementById('modal-date').textContent = d.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'});
   const artists = e.artists.split('|').map(a=>a.trim()).filter(Boolean);
   document.getElementById('modal-artists').textContent = artists.join('  ·  ');
@@ -1120,7 +1120,7 @@ function openModal(e) {
 
 function showDayModal(dateStr) {
   const events = filtered.filter(e=>e.date.slice(0,10)===dateStr);
-  const d = new Date(dateStr+'T12:00:00');
+  const d = new Date(dateStr.slice(0,10)+'T12:00:00');
   document.getElementById('modal-genres').innerHTML = '';
   document.getElementById('modal-title').textContent = d.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'}) + ' — ' + events.length + ' shows';
   document.getElementById('modal-venue').textContent = '';
