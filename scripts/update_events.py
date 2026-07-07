@@ -10,7 +10,7 @@ Usage:
     JAMBASE_API_KEY=your_key python scripts/update_events.py
 
 Optional env vars:
-    DAYS_AHEAD    How many days forward to fetch (default: 180)
+    DAYS_AHEAD    How many days forward to fetch (default: 179)
     EVENTS_PATH   Output file path, relative to repo root (default: events.js)
 """
 
