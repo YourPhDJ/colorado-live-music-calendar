@@ -29,9 +29,10 @@ from urllib3.util.retry import Retry
 # ---------------------------------------------------------------------------
 JAMBASE_API_URL = "https://api.data.jambase.com/v3/events"
 STATE_CODE = "CO"
-DAYS_AHEAD = int(os.environ.get("DAYS_AHEAD", 180))
+DAYS_AHEAD = int(os.environ.get("DAYS_AHEAD", 179))
 PER_PAGE = 50
 EVENTS_PATH = os.environ.get("EVENTS_PATH", "events.js")
+MAX_RATE_LIMIT_RETRIES = 5
 
 # Jambase genre slug normalisation
 def _slug(name: str) -> str:
@@ -72,6 +73,7 @@ def fetch_all_events(api_key: str) -> list[dict]:
     page = 1
     total_pages: int | None = None
     session = _make_session()
+    rate_limit_retries = 0
 
     print(f"Fetching CO events {date_from} → {date_to} …")
 
@@ -98,11 +100,16 @@ def fetch_all_events(api_key: str) -> list[dict]:
         print(f"  HTTP {resp.status_code}")
 
         if resp.status_code == 429:
+            rate_limit_retries += 1
+            if rate_limit_retries > MAX_RATE_LIMIT_RETRIES:
+                print(f"  ✗ Rate limited {MAX_RATE_LIMIT_RETRIES} times in a row on page {page} — giving up", file=sys.stderr)
+                sys.exit(1)
             # Retry-After header may tell us how long to wait
             wait = int(resp.headers.get("Retry-After", 60))
-            print(f"  Rate limited — waiting {wait}s before retry", file=sys.stderr)
+            print(f"  Rate limited — waiting {wait}s before retry ({rate_limit_retries}/{MAX_RATE_LIMIT_RETRIES})", file=sys.stderr)
             time.sleep(wait)
             continue
+        rate_limit_retries = 0
 
         if not resp.ok:
             print(f"  ✗ API error — response body: {resp.text[:500]}", file=sys.stderr)
@@ -299,7 +306,7 @@ def main() -> None:
         print("✗ JAMBASE_API_KEY is not set.", file=sys.stderr)
         sys.exit(1)
 
-    print(f"API key present: {api_key[:8]}…")
+    print("API key present: yes")
 
     # 1. Fetch
     raw_events = fetch_all_events(api_key)
