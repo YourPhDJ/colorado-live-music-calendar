@@ -30,7 +30,7 @@ from urllib3.util.retry import Retry
 JAMBASE_API_URL = "https://api.data.jambase.com/v3/events"
 STATE_CODE = "CO"
 DAYS_AHEAD = int(os.environ.get("DAYS_AHEAD", 179))
-PER_PAGE = 50
+PER_PAGE = 100  # Changed from 50 to 100 to halve API call usage
 EVENTS_PATH = os.environ.get("EVENTS_PATH", "events.js")
 MAX_RATE_LIMIT_RETRIES = 5
 
@@ -104,7 +104,6 @@ def fetch_all_events(api_key: str) -> list[dict]:
             if rate_limit_retries > MAX_RATE_LIMIT_RETRIES:
                 print(f"  ✗ Rate limited {MAX_RATE_LIMIT_RETRIES} times in a row on page {page} — giving up", file=sys.stderr)
                 sys.exit(1)
-            # Retry-After header may tell us how long to wait
             wait = int(resp.headers.get("Retry-After", 60))
             print(f"  Rate limited — waiting {wait}s before retry ({rate_limit_retries}/{MAX_RATE_LIMIT_RETRIES})", file=sys.stderr)
             time.sleep(wait)
@@ -126,11 +125,8 @@ def fetch_all_events(api_key: str) -> list[dict]:
             print(f"  Raw response: {resp.text[:500]}", file=sys.stderr)
             sys.exit(1)
 
-        # On the first page dump structure so CI logs tell us what we're
-        # working with — this has been invaluable for debugging field names
         if page == 1:
             print(f"  Top-level response keys: {list(data.keys())}")
-            # Use explicit key check, not `or`, to avoid treating [] as falsy
             sample_events = (
                 data["events"] if "events" in data
                 else data.get("data", [])
@@ -138,7 +134,6 @@ def fetch_all_events(api_key: str) -> list[dict]:
             if sample_events:
                 first = sample_events[0]
                 print(f"  First event keys: {list(first.keys())}")
-                # Also log the first performer to verify genre field location
                 performers = first.get("performer", [])
                 if performers:
                     print(f"  First performer keys: {list(performers[0].keys())}")
@@ -146,8 +141,6 @@ def fetch_all_events(api_key: str) -> list[dict]:
                     print(f"  First performer genres: {performer_genres[:3]}")
                 print(f"  First event (truncated): {json.dumps(first, default=str)[:600]}")
 
-        # Use explicit key presence check — an empty list [] is falsy,
-        # which would incorrectly fall through to the "data" key
         if "events" in data:
             page_events = data["events"]
         elif "data" in data:
@@ -160,7 +153,6 @@ def fetch_all_events(api_key: str) -> list[dict]:
             print(f"  Full response: {json.dumps(data, default=str)[:1000]}", file=sys.stderr)
             sys.exit(1)
 
-        # Deduplicate by ID across pages
         new_count = 0
         for ev in page_events:
             ev_id = ev.get("identifier", ev.get("id", ""))
@@ -169,7 +161,6 @@ def fetch_all_events(api_key: str) -> list[dict]:
                 all_events.append(ev)
                 new_count += 1
 
-        # Same explicit key check for pagination
         if "pagination" in data:
             pagination = data["pagination"]
         elif "meta" in data:
@@ -198,16 +189,7 @@ def fetch_all_events(api_key: str) -> list[dict]:
 # Map
 # ---------------------------------------------------------------------------
 def _extract_genres(raw: dict) -> str:
-    """
-    Returns a comma-separated genre slug string.
-
-    Jambase v3 puts genres on performer objects, not on the event itself.
-    The event-level `genre` array is checked first as a fallback, but in
-    practice it is almost always empty.
-
-    Genres are deduplicated and ordered by first appearance (headliner first).
-    """
-    seen: dict[str, None] = {}  # dict preserves insertion order + deduplicates
+    seen: dict[str, None] = {}
 
     for g in raw.get("genre", []):
         name = _genre_name(g)
@@ -224,40 +206,27 @@ def _extract_genres(raw: dict) -> str:
 
 
 def _best_ticket_url(offers: list[dict]) -> str:
-    """
-    Prefer an offer explicitly named as a ticket purchase link.
-    Fall back to the first offer URL if no better match found.
-    """
     ticket_keywords = {"ticket", "tickets", "buy", "purchase", "get tickets"}
     for offer in offers:
         name = offer.get("name", "").lower()
         if any(kw in name for kw in ticket_keywords):
             return offer.get("url", "")
-    # Fall back to first offer
     return offers[0].get("url", "") if offers else ""
 
 
 def map_event(raw: dict) -> dict:
-    """Convert a raw Jambase v3 event object to the ALL_EVENTS schema."""
-
-    # ID: "jambase:event:15106153" → "15106153"
     identifier = raw.get("identifier", "")
     event_id = identifier.rsplit(":", 1)[-1] if identifier else str(raw.get("id", ""))
 
-    # Location — use explicit .get with defaults, not `or`, for numeric fields
     location = raw.get("location", {})
     address = location.get("address", {})
     geo = location.get("geo", {})
 
-    # Performers
     performers = raw.get("performer", [])
     headliner = performers[0].get("name", "") if performers else ""
     artists_str = " | ".join(p.get("name", "") for p in performers if p.get("name"))
 
-    # Genres (see _extract_genres docstring)
     genres_str = _extract_genres(raw)
-
-    # Tickets — pick the most relevant offer URL
     tickets_url = _best_ticket_url(raw.get("offers", []))
 
     return {
@@ -266,7 +235,7 @@ def map_event(raw: dict) -> dict:
         "date": raw.get("startDate", ""),
         "venue": location.get("name", ""),
         "city": address.get("addressLocality", ""),
-        "lat": geo.get("latitude", 0),    # explicit default, not `or 0`
+        "lat": geo.get("latitude", 0),
         "lng": geo.get("longitude", 0),
         "headliner": headliner,
         "artists": artists_str,
@@ -280,11 +249,6 @@ def map_event(raw: dict) -> dict:
 # Write events.js
 # ---------------------------------------------------------------------------
 def write_events_js(events: list[dict], path: str = EVENTS_PATH) -> None:
-    """
-    Write events to a standalone JS file that index.html loads at runtime.
-    This keeps UI code and data completely separate — nightly runs never
-    touch index.html.
-    """
     events_json = json.dumps(events, separators=(",", ":"), ensure_ascii=False)
     today_str = date.today().isoformat()
     content = (
@@ -308,21 +272,17 @@ def main() -> None:
 
     print("API key present: yes")
 
-    # 1. Fetch
     raw_events = fetch_all_events(api_key)
     print(f"\nTotal raw events fetched: {len(raw_events)}")
 
-    # 2. Drop cancelled/postponed
     raw_events = [
         e for e in raw_events
         if e.get("eventStatus") not in ("EventCancelled", "EventPostponed")
     ]
     print(f"After filtering cancelled/postponed: {len(raw_events)}")
 
-    # 3. Map to schema
     events = [map_event(e) for e in raw_events]
 
-    # 4. Log genre coverage — if this shows 0 we know the fix didn't work
     with_genres = sum(1 for e in events if e["genres"])
     print(f"Events with genres: {with_genres}/{len(events)} ({100*with_genres//max(len(events),1)}%)")
     if with_genres == 0:
@@ -332,10 +292,8 @@ def main() -> None:
             file=sys.stderr,
         )
 
-    # 5. Sort chronologically
     events.sort(key=lambda e: (e["date"], e["name"]))
 
-    # 6. Write events.js
     print(f"\nWriting {EVENTS_PATH} …")
     write_events_js(events)
 
